@@ -1,0 +1,6 @@
+{
+  "name": "MOONRUN",
+  "description": "A cinematic sci-fi lunar escape runner. Outrun cosmic tentacles, manage your oxygen supply to jump and boost, collect ship repair parts, and reach your spacecraft.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
