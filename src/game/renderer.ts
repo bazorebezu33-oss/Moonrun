@@ -1,15 +1,19 @@
-import { LevelItem } from './types.ts';
+import { LevelItem, SimulationState } from './types.ts';
 
 /**
- * Ultra-high-fidelity Canvas 2D renderer for MOONRUN.
- * Faithfully matches Moonrun_visual_reference.png:
- * - Painterly Blue Marble Earth with realistic continents, swirling cyclone clouds, and cyan atmospheric rim
- * - Multi-layered high-contrast craggy lunar mountain ranges
- * - Textured lunar regolith with craters, fissures, rocks, and vertical chasm fractures
- * - Massive alien tentacles surging from erupting ground dust and ejecta rocks
- * - Articulated Apollo astronaut in crisp white suit, reflective dark visor, and cyan jet plume
- * - Floating cyan O2 canisters with glowing brackets and amber hexagonal repair modules
- * - Spacecraft on horizon ridge transitioning to full launchpad shuttle at course end
+ * Canvas 2D renderer for MOONRUN.
+ *
+ * Logical-to-Display Mapping:
+ * - Logical track distance: meters [0, 1000m].
+ * - Logical altitude: meters (0m = ground surface, >0m = airborne, <0m = inside chasm).
+ * - Player screen anchor: fixed at 25% of viewport width (W * 0.25).
+ * - Visible horizon window: ~45 meters across viewport (pixelsPerMeterX = W / 45).
+ * - Vertical scale: pixelsPerMeterY = Math.max(30, H / 20).
+ * - Ground display line: groundY = H * 0.72.
+ * - Player screen Y: groundY - altitudeMeters * pixelsPerMeterY.
+ *
+ * Resizing changes only the visual pixel projection; all physics and collision
+ * calculations remain 100% invariant in logical units.
  */
 
 interface Particle {
@@ -34,7 +38,7 @@ export class GameRenderer {
   // Starfield
   private stars: { x: number; y: number; size: number; alpha: number; twinkleSpeed: number }[] = [];
 
-  // Particle pool
+  // Particle pool (fixed ring buffer)
   private readonly maxParticles = 400;
   private particles: Particle[] = [];
   private particleIndex: number = 0;
@@ -47,7 +51,7 @@ export class GameRenderer {
   private mountainRidge2: number[] = [];
   private mountainRidge3: number[] = [];
 
-  // Pre-rendered Earth offscreen canvas for crisp performance
+  // Pre-rendered Earth offscreen canvas
   private earthCanvas: HTMLCanvasElement | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -93,7 +97,7 @@ export class GameRenderer {
       const o1 = Math.sin(u * Math.PI * 4) * variance;
       const o2 = Math.sin(u * Math.PI * 12 + 1.2) * (variance * 0.45);
       const o3 = Math.cos(u * Math.PI * 26 + 2.5) * (variance * 0.25);
-      const o4 = Math.abs(Math.sin(u * Math.PI * 8)) * (variance * 0.35); // sharp jagged peaks
+      const o4 = Math.abs(Math.sin(u * Math.PI * 8)) * (variance * 0.35);
       arr.push(baseHeight + o1 + o2 + o3 + o4);
     }
     return arr;
@@ -130,7 +134,6 @@ export class GameRenderer {
     const cy = size * 0.5;
     const r = size * 0.42;
 
-    // Atmospheric outer corona
     const halo = ectx.createRadialGradient(cx, cy, r * 0.85, cx, cy, r * 1.2);
     halo.addColorStop(0, 'rgba(56, 189, 248, 0.65)');
     halo.addColorStop(0.4, 'rgba(37, 99, 235, 0.25)');
@@ -141,13 +144,11 @@ export class GameRenderer {
     ectx.arc(cx, cy, r * 1.2, 0, Math.PI * 2);
     ectx.fill();
 
-    // Earth Sphere Clip
     ectx.save();
     ectx.beginPath();
     ectx.arc(cx, cy, r, 0, Math.PI * 2);
     ectx.clip();
 
-    // Vibrant Pacific/Atlantic Ocean base
     const ocean = ectx.createRadialGradient(cx - r * 0.35, cy - r * 0.35, r * 0.1, cx, cy, r);
     ocean.addColorStop(0, '#1E40AF');
     ocean.addColorStop(0.45, '#1D4ED8');
@@ -156,54 +157,44 @@ export class GameRenderer {
     ectx.fillStyle = ocean;
     ectx.fillRect(0, 0, size, size);
 
-    // Realistic Continents
-    // North America & Eurasia
     ectx.fillStyle = '#15803D';
     ectx.beginPath();
     ectx.arc(cx - r * 0.25, cy - r * 0.22, r * 0.36, 0, Math.PI * 2);
     ectx.arc(cx + r * 0.05, cy - r * 0.3, r * 0.28, 0, Math.PI * 2);
     ectx.fill();
 
-    // Sahara / Mediterranean arid belt
     ectx.fillStyle = '#B45309';
     ectx.beginPath();
     ectx.ellipse(cx - r * 0.08, cy - r * 0.05, r * 0.24, r * 0.14, 0.2, 0, Math.PI * 2);
     ectx.fill();
 
-    // African & South American rainforests
     ectx.fillStyle = '#166534';
     ectx.beginPath();
     ectx.ellipse(cx + r * 0.12, cy + r * 0.18, r * 0.28, r * 0.42, 0.25, 0, Math.PI * 2);
     ectx.fill();
 
-    // Swirling Cloud Systems & Cyclones
-    // Spiral storm band 1 (North)
     ectx.fillStyle = 'rgba(255, 255, 255, 0.88)';
     ectx.beginPath();
     ectx.ellipse(cx - r * 0.15, cy - r * 0.35, r * 0.55, r * 0.12, -0.3, 0, Math.PI * 2);
     ectx.ellipse(cx + r * 0.22, cy - r * 0.16, r * 0.4, r * 0.14, 0.4, 0, Math.PI * 2);
     ectx.fill();
 
-    // Cyclone eye
     ectx.fillStyle = 'rgba(255, 255, 255, 0.95)';
     ectx.beginPath();
     ectx.arc(cx - r * 0.25, cy - r * 0.38, r * 0.08, 0, Math.PI * 2);
     ectx.fill();
 
-    // Tropical cloud front
     ectx.fillStyle = 'rgba(255, 255, 255, 0.78)';
     ectx.beginPath();
     ectx.ellipse(cx - r * 0.1, cy + r * 0.08, r * 0.6, r * 0.12, -0.15, 0, Math.PI * 2);
     ectx.ellipse(cx + r * 0.15, cy + r * 0.32, r * 0.48, r * 0.16, 0.28, 0, Math.PI * 2);
     ectx.fill();
 
-    // Polar ice cap
     ectx.fillStyle = '#FFFFFF';
     ectx.beginPath();
     ectx.ellipse(cx - r * 0.05, cy - r * 0.85, r * 0.36, r * 0.12, 0, 0, Math.PI * 2);
     ectx.fill();
 
-    // Night-Side Terminator Shadow (sun illuminated from upper-left)
     const terminator = ectx.createRadialGradient(
       cx - r * 0.5,
       cy - r * 0.5,
@@ -219,7 +210,6 @@ export class GameRenderer {
     ectx.fillStyle = terminator;
     ectx.fillRect(0, 0, size, size);
 
-    // Rim specular arc
     ectx.strokeStyle = '#38BDF8';
     ectx.lineWidth = 3;
     ectx.beginPath();
@@ -259,23 +249,19 @@ export class GameRenderer {
 
   public render(
     dt: number,
-    distanceMeters: number,
-    remainingMeters: number,
-    playerX: number,
-    playerY: number,
-    vy: number,
-    isGrounded: boolean,
-    isBoosting: boolean,
-    isSlowed: boolean,
-    threatDistance: number,
-    items: LevelItem[],
-    timeElapsed: number,
-    outcome: string | null = null
+    simState: SimulationState,
+    items: LevelItem[]
   ) {
     const ctx = this.ctx;
     const w = this.width;
     const h = this.height;
     const groundY = h * 0.72;
+
+    const pixelsPerMeterX = w / 45;
+    const pixelsPerMeterY = Math.max(28, h / 20);
+
+    const playerScreenX = w * 0.25;
+    const playerScreenY = groundY - simState.altitudeMeters * pixelsPerMeterY;
 
     // Screen shake
     let shakeX = 0;
@@ -291,38 +277,47 @@ export class GameRenderer {
     ctx.translate(shakeX, shakeY);
 
     // 1. Sky & Cosmos
-    this.drawSky(ctx, w, h, timeElapsed);
+    this.drawSky(ctx, w, h, simState.timeElapsedSec);
 
-    // 2. Realistic Earth & Moonlet
-    this.drawEarth(ctx, w, h, distanceMeters);
+    // 2. Earth & Moonlet
+    this.drawEarth(ctx, w, h, simState.distanceMeters);
 
-    // 3. Jagged Lunar Mountain Parallax
-    this.drawMountains(ctx, w, groundY, distanceMeters);
+    // 3. Parallax Mountains
+    this.drawMountains(ctx, w, groundY, simState.distanceMeters);
 
-    // 4. Distant Horizon Spacecraft or Finish Launchpad
-    this.drawSpacecraft(ctx, w, groundY, distanceMeters, remainingMeters, outcome, timeElapsed);
+    // 4. Distant Spacecraft or Launchpad
+    this.drawSpacecraft(
+      ctx,
+      w,
+      groundY,
+      simState.distanceMeters,
+      Math.max(0, 1000 - simState.distanceMeters),
+      simState.gameOverReason,
+      simState.timeElapsedSec
+    );
 
-    // 5. Lunar Terrain, Craters, and Chasms
-    this.drawTerrain(ctx, w, h, groundY, distanceMeters, items);
+    // 5. Lunar Terrain & Chasms
+    this.drawTerrain(ctx, w, h, groundY, simState.distanceMeters, items, pixelsPerMeterX, playerScreenX);
 
-    // 6. Collectibles & Rocks
-    this.drawLevelItems(ctx, groundY, distanceMeters, items, timeElapsed);
+    // 6. Level Items (Rocks derived from shared geometry, Collectibles)
+    this.drawLevelItems(ctx, groundY, simState.distanceMeters, items, simState.timeElapsedSec, pixelsPerMeterX, pixelsPerMeterY, playerScreenX);
 
     // 7. Apollo Astronaut
     this.drawAstronaut(
       ctx,
-      playerX,
-      playerY,
-      vy,
-      isGrounded,
-      isBoosting,
-      isSlowed,
-      timeElapsed,
-      dt
+      playerScreenX,
+      playerScreenY,
+      simState.vy,
+      simState.isGrounded,
+      simState.isBoosting,
+      simState.slowdownTimer > 0,
+      simState.timeElapsedSec,
+      dt,
+      pixelsPerMeterY
     );
 
-    // 8. Menacing Organic Tentacles
-    this.drawTentacles(ctx, groundY, threatDistance, timeElapsed, dt);
+    // 8. Alien Tentacles
+    this.drawTentacles(ctx, groundY, simState.threatDistance, simState.timeElapsedSec, dt);
 
     // 9. Particles
     this.updateAndDrawParticles(ctx, dt);
@@ -333,8 +328,6 @@ export class GameRenderer {
     ctx.restore();
   }
 
-  // --- Render Sub-methods ---
-
   private drawSky(ctx: CanvasRenderingContext2D, w: number, h: number, time: number) {
     const skyGrad = ctx.createLinearGradient(0, 0, 0, h);
     skyGrad.addColorStop(0, '#04070D');
@@ -343,7 +336,6 @@ export class GameRenderer {
     ctx.fillStyle = skyGrad;
     ctx.fillRect(0, 0, w, h);
 
-    // Cosmic glow in upper right
     const nebulaGrad = ctx.createRadialGradient(w * 0.68, h * 0.28, 50, w * 0.68, h * 0.28, w * 0.55);
     nebulaGrad.addColorStop(0, 'rgba(56, 189, 248, 0.08)');
     nebulaGrad.addColorStop(0.4, 'rgba(147, 51, 234, 0.04)');
@@ -351,7 +343,6 @@ export class GameRenderer {
     ctx.fillStyle = nebulaGrad;
     ctx.fillRect(0, 0, w, h);
 
-    // Stars
     for (const star of this.stars) {
       const sx = star.x * w;
       const sy = star.y * h;
@@ -365,7 +356,6 @@ export class GameRenderer {
     if (!this.earthCanvas) return;
 
     ctx.save();
-    // Position matches reference image: X ~ 67%, Y ~ 27%
     const earthX = w * 0.67 - (distanceMeters * 0.015) % (w * 0.15);
     const earthY = h * 0.27;
     const ew = this.earthCanvas.width;
@@ -373,7 +363,6 @@ export class GameRenderer {
 
     ctx.drawImage(this.earthCanvas, earthX - ew * 0.5, earthY - eh * 0.5);
 
-    // Distant small companion moon in mid-left sky
     const moon2X = w * 0.44;
     const moon2Y = h * 0.34;
     const moon2R = 9;
@@ -396,19 +385,14 @@ export class GameRenderer {
     distanceMeters: number
   ) {
     ctx.save();
-
-    // Layer 1: Distant dark mountains (factor 0.06)
     const off1 = (distanceMeters * 1.5) % w;
     this.drawJaggedRidge(ctx, w, groundY - 165, off1, this.mountainRidge1, '#0F172A', '#1E293B');
 
-    // Layer 2: Mid-distance craggy peaks with crater notches (factor 0.2)
     const off2 = (distanceMeters * 4.2) % w;
     this.drawJaggedRidge(ctx, w, groundY - 105, off2, this.mountainRidge2, '#1E293B', '#334155');
 
-    // Layer 3: Near rolling lunar craters and foothills (factor 0.45)
     const off3 = (distanceMeters * 9.0) % w;
     this.drawJaggedRidge(ctx, w, groundY - 55, off3, this.mountainRidge3, '#334155', '#475569');
-
     ctx.restore();
   }
 
@@ -453,14 +437,12 @@ export class GameRenderer {
     ctx.save();
 
     if (remainingMeters > 75) {
-      // Distant silhouette on horizon ridge (as in reference image)
       const distShipX = w * 0.92;
       const distShipY = groundY - 32;
 
       ctx.translate(distShipX, distShipY);
       ctx.scale(0.65, 0.65);
 
-      // Distant silhouette
       ctx.fillStyle = '#475569';
       ctx.beginPath();
       ctx.moveTo(25, -2);
@@ -472,14 +454,12 @@ export class GameRenderer {
       ctx.closePath();
       ctx.fill();
 
-      // Blinking amber cockpit light
       const blink = 0.5 + 0.5 * Math.sin(time * 4);
       ctx.fillStyle = `rgba(255, 190, 85, ${blink})`;
       ctx.shadowColor = '#FFBE55';
       ctx.shadowBlur = 8;
       ctx.fillRect(8, -5, 5, 3);
     } else {
-      // Approached the spacecraft at finish line!
       let shipX = w * 0.72;
       let shipY = groundY - 12;
       const scale = 1.7;
@@ -500,7 +480,6 @@ export class GameRenderer {
       ctx.translate(shipX, shipY);
       ctx.scale(scale, scale);
 
-      // Main hull
       ctx.fillStyle = '#E2E8F0';
       ctx.beginPath();
       ctx.moveTo(38, -2);
@@ -512,7 +491,6 @@ export class GameRenderer {
       ctx.closePath();
       ctx.fill();
 
-      // Dark paneling
       ctx.fillStyle = '#475569';
       ctx.beginPath();
       ctx.moveTo(38, -2);
@@ -523,7 +501,6 @@ export class GameRenderer {
       ctx.closePath();
       ctx.fill();
 
-      // Cockpit windows
       ctx.fillStyle = '#FFBE55';
       ctx.shadowColor = '#FFBE55';
       ctx.shadowBlur = 14;
@@ -531,11 +508,9 @@ export class GameRenderer {
       ctx.ellipse(14, -6, 7, 3, 0.12, 0, Math.PI * 2);
       ctx.fill();
 
-      // Engines
       ctx.fillStyle = '#F59E0B';
       ctx.fillRect(-30, -7, 6, 12);
 
-      // Struts
       ctx.strokeStyle = '#334155';
       ctx.lineWidth = 2.5;
       ctx.beginPath();
@@ -545,7 +520,6 @@ export class GameRenderer {
       ctx.lineTo(18, 20);
       ctx.stroke();
 
-      // Rocket flame
       if (outcome === 'victory_escape' || (outcome === 'victory_crash' && time % 3 < 1.5)) {
         const flicker = 0.8 + 0.4 * Math.sin(time * 35);
         ctx.fillStyle = '#FFBE55';
@@ -569,7 +543,9 @@ export class GameRenderer {
     h: number,
     groundY: number,
     distanceMeters: number,
-    items: LevelItem[]
+    items: LevelItem[],
+    ppmX: number,
+    playerScreenX: number
   ) {
     ctx.save();
 
@@ -577,36 +553,31 @@ export class GameRenderer {
       (it) => it.type === 'chasm' && Math.abs(it.distanceMeters - distanceMeters) < 80
     );
 
-    const ppm = w / 45;
-    const screenPlayerX = w * 0.25;
-
-    // High contrast lunar ground gradient
     const groundGrad = ctx.createLinearGradient(0, groundY, 0, h);
-    groundGrad.addColorStop(0, '#A3AEBC'); // Lunar grey
+    groundGrad.addColorStop(0, '#A3AEBC');
     groundGrad.addColorStop(0.06, '#64748B');
     groundGrad.addColorStop(0.28, '#334155');
     groundGrad.addColorStop(1, '#0B111E');
 
     ctx.fillStyle = groundGrad;
 
-    // Draw terrain with jagged crags
     ctx.beginPath();
     ctx.moveTo(0, h);
     ctx.lineTo(0, groundY);
 
     let currentX = 0;
     while (currentX < w) {
-      const currentWorldM = distanceMeters + (currentX - screenPlayerX) / ppm;
+      const currentWorldM = distanceMeters + (currentX - playerScreenX) / ppmX;
       const chasm = visibleChasms.find(
         (c) =>
           currentWorldM >= c.distanceMeters &&
-          currentWorldM <= c.distanceMeters + (c.widthMeters || 10)
+          currentWorldM < c.distanceMeters + (c.widthMeters ?? 10)
       );
 
       if (chasm) {
-        const chasmStart = screenPlayerX + (chasm.distanceMeters - distanceMeters) * ppm;
+        const chasmStart = playerScreenX + (chasm.distanceMeters - distanceMeters) * ppmX;
         const chasmEnd =
-          screenPlayerX + (chasm.distanceMeters + (chasm.widthMeters || 10) - distanceMeters) * ppm;
+          playerScreenX + (chasm.distanceMeters + (chasm.widthMeters ?? 10) - distanceMeters) * ppmX;
 
         if (chasmStart > currentX) {
           ctx.lineTo(chasmStart, groundY);
@@ -616,9 +587,8 @@ export class GameRenderer {
         ctx.lineTo(chasmEnd, groundY);
         currentX = chasmEnd + 2;
       } else {
-        const bump = Math.sin(currentWorldM * 2.8) * 2.5 + Math.cos(currentWorldM * 6.5) * 1.5;
-        ctx.lineTo(currentX, groundY + bump);
-        currentX += 20;
+        ctx.lineTo(currentX, groundY);
+        currentX += 25;
       }
     }
 
@@ -627,10 +597,10 @@ export class GameRenderer {
     ctx.closePath();
     ctx.fill();
 
-    // Chasm internal vertical rock fracture walls
+    // Chasm internal vertical walls
     for (const c of visibleChasms) {
-      const cStart = screenPlayerX + (c.distanceMeters - distanceMeters) * ppm;
-      const cEnd = screenPlayerX + (c.distanceMeters + (c.widthMeters || 10) - distanceMeters) * ppm;
+      const cStart = playerScreenX + (c.distanceMeters - distanceMeters) * ppmX;
+      const cEnd = playerScreenX + (c.distanceMeters + (c.widthMeters ?? 10) - distanceMeters) * ppmX;
       if (cEnd > 0 && cStart < w) {
         ctx.fillStyle = '#04070D';
         ctx.fillRect(cStart, groundY, cEnd - cStart, h - groundY);
@@ -638,12 +608,10 @@ export class GameRenderer {
         ctx.strokeStyle = '#475569';
         ctx.lineWidth = 3.5;
         ctx.beginPath();
-        // Left crag wall
         ctx.moveTo(cStart, groundY);
         ctx.lineTo(cStart + 8, groundY + 45);
         ctx.lineTo(cStart + 3, groundY + 95);
         ctx.lineTo(cStart + 12, h);
-        // Right crag wall
         ctx.moveTo(cEnd, groundY);
         ctx.lineTo(cEnd - 8, groundY + 40);
         ctx.lineTo(cEnd - 3, groundY + 90);
@@ -652,17 +620,17 @@ export class GameRenderer {
       }
     }
 
-    // Foreground boulders & lunar surface pebbles
+    // Surface texture (purely cosmetic speckles, non-colliding)
     ctx.fillStyle = '#CBD5E1';
     for (let sx = 0; sx < w; sx += 24) {
-      const worldM = distanceMeters + (sx - screenPlayerX) / ppm;
+      const worldM = distanceMeters + (sx - playerScreenX) / ppmX;
       const inChasm = visibleChasms.some(
-        (c) => worldM >= c.distanceMeters && worldM <= c.distanceMeters + (c.widthMeters || 10)
+        (c) => worldM >= c.distanceMeters && worldM < c.distanceMeters + (c.widthMeters ?? 10)
       );
       if (!inChasm) {
         const seed = Math.sin(worldM * 18.3);
         if (seed > 0.42) {
-          ctx.fillRect(sx, groundY + seed * 5, 3.5, 2.5);
+          ctx.fillRect(sx, groundY + 2 + seed * 3, 3.5, 2.0);
         }
       }
     }
@@ -675,26 +643,29 @@ export class GameRenderer {
     groundY: number,
     distanceMeters: number,
     items: LevelItem[],
-    time: number
+    time: number,
+    ppmX: number,
+    ppmY: number,
+    playerScreenX: number
   ) {
-    const w = this.width;
-    const ppm = w / 45;
-    const screenPlayerX = w * 0.25;
-
     for (const item of items) {
       if (item.collected || item.type === 'chasm') continue;
 
-      const itemScreenX = screenPlayerX + (item.distanceMeters - distanceMeters) * ppm;
-      if (itemScreenX < -80 || itemScreenX > w + 80) continue;
-
-      const baseY = groundY + (item.yOffset || 0);
+      const itemScreenX = playerScreenX + (item.distanceMeters - distanceMeters) * ppmX;
+      if (itemScreenX < -80 || itemScreenX > this.width + 80) continue;
 
       if (item.type === 'oxygen') {
-        this.drawOxygenCanister(ctx, itemScreenX, baseY, time);
+        const itemAlt = item.altitudeMeters ?? 1.1;
+        const screenY = groundY - itemAlt * ppmY;
+        this.drawOxygenCanister(ctx, itemScreenX, screenY, time);
       } else if (item.type === 'part') {
-        this.drawRepairPart(ctx, itemScreenX, baseY, time);
+        const itemAlt = item.altitudeMeters ?? 1.2;
+        const screenY = groundY - itemAlt * ppmY;
+        this.drawRepairPart(ctx, itemScreenX, screenY, time);
       } else if (item.type === 'rock') {
-        this.drawRockObstacle(ctx, itemScreenX, groundY, item.widthMeters || 2.5, item.heightMeters || 1.8);
+        const rockW = (item.widthMeters ?? 2.0) * ppmX;
+        const rockH = (item.heightMeters ?? 1.3) * ppmY;
+        this.drawRockObstacle(ctx, itemScreenX, groundY, rockW, rockH);
       }
     }
   }
@@ -709,39 +680,35 @@ export class GameRenderer {
     const bob = Math.sin(time * 3.5) * 6;
     const cy = y + bob;
 
-    // Glowing cyan ground reflection
-    const groundReflect = ctx.createRadialGradient(x, cy + 38, 2, x, cy + 38, 34);
+    const groundReflect = ctx.createRadialGradient(x, cy + 34, 2, x, cy + 34, 30);
     groundReflect.addColorStop(0, 'rgba(67, 217, 245, 0.55)');
     groundReflect.addColorStop(1, 'rgba(67, 217, 245, 0)');
     ctx.fillStyle = groundReflect;
     ctx.beginPath();
-    ctx.ellipse(x, cy + 36, 32, 9, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, cy + 32, 28, 8, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Outer cyan protective cage
     ctx.shadowColor = '#43D9F5';
-    ctx.shadowBlur = 22;
+    ctx.shadowBlur = 20;
     ctx.strokeStyle = '#43D9F5';
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.roundRect(x - 16, cy - 28, 32, 56, 10);
+    ctx.roundRect(x - 14, cy - 24, 28, 48, 8);
     ctx.stroke();
 
-    // Cyan glowing capsule body
-    const canGrad = ctx.createLinearGradient(x - 14, cy - 24, x + 14, cy + 24);
+    const canGrad = ctx.createLinearGradient(x - 12, cy - 20, x + 12, cy + 20);
     canGrad.addColorStop(0, '#E0F2FE');
     canGrad.addColorStop(0.3, '#38BDF8');
     canGrad.addColorStop(0.7, '#0284C7');
     canGrad.addColorStop(1, '#0C4A6E');
     ctx.fillStyle = canGrad;
     ctx.beginPath();
-    ctx.roundRect(x - 12, cy - 24, 24, 48, 8);
+    ctx.roundRect(x - 10, cy - 20, 20, 40, 6);
     ctx.fill();
 
-    // Illuminated "O2" text stencil
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = 8;
     ctx.fillStyle = '#FFFFFF';
-    ctx.font = 'bold 15px "Chakra Petch", monospace, sans-serif';
+    ctx.font = 'bold 13px "Chakra Petch", monospace, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('O₂', x, cy);
@@ -760,24 +727,21 @@ export class GameRenderer {
     const cy = y + bob;
     const rot = time * 1.5;
 
-    // Amber ground light reflection
-    const groundReflect = ctx.createRadialGradient(x, cy + 34, 2, x, cy + 34, 30);
+    const groundReflect = ctx.createRadialGradient(x, cy + 30, 2, x, cy + 30, 26);
     groundReflect.addColorStop(0, 'rgba(255, 190, 85, 0.6)');
     groundReflect.addColorStop(1, 'rgba(255, 190, 85, 0)');
     ctx.fillStyle = groundReflect;
     ctx.beginPath();
-    ctx.ellipse(x, cy + 34, 28, 8, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, cy + 30, 25, 7, 0, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.translate(x, cy);
     ctx.rotate(rot);
 
-    // Amber bloom
     ctx.shadowColor = '#FFBE55';
-    ctx.shadowBlur = 22;
+    ctx.shadowBlur = 20;
 
-    // Outer hexagonal casing
-    const r = 18;
+    const r = 16;
     ctx.fillStyle = '#FFBE55';
     ctx.beginPath();
     for (let i = 0; i < 6; i++) {
@@ -790,7 +754,6 @@ export class GameRenderer {
     ctx.closePath();
     ctx.fill();
 
-    // Inner mechanical core
     ctx.fillStyle = '#78350F';
     ctx.beginPath();
     for (let i = 0; i < 6; i++) {
@@ -803,10 +766,9 @@ export class GameRenderer {
     ctx.closePath();
     ctx.fill();
 
-    // Central core pin
     ctx.fillStyle = '#FFFFFF';
     ctx.beginPath();
-    ctx.arc(0, 0, 4, 0, Math.PI * 2);
+    ctx.arc(0, 0, 3.5, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.restore();
@@ -816,39 +778,38 @@ export class GameRenderer {
     ctx: CanvasRenderingContext2D,
     x: number,
     groundY: number,
-    widthM: number,
-    heightM: number
+    pixelW: number,
+    pixelH: number
   ) {
     ctx.save();
-    const w = widthM * 20;
-    const h = heightM * 22;
+    const halfW = pixelW * 0.5;
 
     ctx.fillStyle = '#374151';
     ctx.beginPath();
-    ctx.moveTo(x - w * 0.5, groundY);
-    ctx.lineTo(x - w * 0.45, groundY - h * 0.65);
-    ctx.lineTo(x - w * 0.15, groundY - h);
-    ctx.lineTo(x + w * 0.25, groundY - h * 0.85);
-    ctx.lineTo(x + w * 0.5, groundY);
+    ctx.moveTo(x - halfW, groundY);
+    ctx.lineTo(x - halfW * 0.9, groundY - pixelH * 0.65);
+    ctx.lineTo(x - halfW * 0.3, groundY - pixelH);
+    ctx.lineTo(x + halfW * 0.5, groundY - pixelH * 0.85);
+    ctx.lineTo(x + halfW, groundY);
     ctx.closePath();
     ctx.fill();
 
     ctx.fillStyle = '#9CA3AF';
     ctx.beginPath();
-    ctx.moveTo(x - w * 0.5, groundY);
-    ctx.lineTo(x - w * 0.45, groundY - h * 0.65);
-    ctx.lineTo(x - w * 0.15, groundY - h);
-    ctx.lineTo(x, groundY - h * 0.5);
-    ctx.lineTo(x - w * 0.2, groundY);
+    ctx.moveTo(x - halfW, groundY);
+    ctx.lineTo(x - halfW * 0.9, groundY - pixelH * 0.65);
+    ctx.lineTo(x - halfW * 0.3, groundY - pixelH);
+    ctx.lineTo(x, groundY - pixelH * 0.5);
+    ctx.lineTo(x - halfW * 0.4, groundY);
     ctx.closePath();
     ctx.fill();
 
     ctx.fillStyle = '#111827';
     ctx.beginPath();
-    ctx.moveTo(x + w * 0.25, groundY - h * 0.85);
-    ctx.lineTo(x + w * 0.5, groundY);
-    ctx.lineTo(x + w * 0.1, groundY);
-    ctx.lineTo(x, groundY - h * 0.5);
+    ctx.moveTo(x + halfW * 0.5, groundY - pixelH * 0.85);
+    ctx.lineTo(x + halfW, groundY);
+    ctx.lineTo(x + halfW * 0.2, groundY);
+    ctx.lineTo(x, groundY - pixelH * 0.5);
     ctx.closePath();
     ctx.fill();
 
@@ -864,17 +825,18 @@ export class GameRenderer {
     isBoosting: boolean,
     isSlowed: boolean,
     time: number,
-    dt: number
+    dt: number,
+    ppmY: number
   ) {
     ctx.save();
     ctx.translate(x, y);
 
-    const baseScale = 1.35;
+    const baseScale = (ppmY / 35.0) * 1.15;
     let scaleX = baseScale;
     let scaleY = baseScale;
 
     if (!isGrounded) {
-      if (vy < -50) {
+      if (vy > 1.5) {
         scaleX = baseScale * 0.92;
         scaleY = baseScale * 1.15;
       } else {
@@ -894,12 +856,10 @@ export class GameRenderer {
     const legSwing = Math.sin(runCycle);
     const armSwing = Math.sin(runCycle + Math.PI);
 
-    // Jet plume when boosting
     if (isBoosting) {
       this.drawJetPlume(ctx, -24, -20, time, dt, x, y);
     }
 
-    // Dust particles from boots
     if (isGrounded && Math.abs(legSwing) > 0.8 && Math.random() < 0.45) {
       this.spawnParticle(
         x - 12,
@@ -912,7 +872,6 @@ export class GameRenderer {
       );
     }
 
-    // Shadow
     ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
     ctx.beginPath();
     ctx.ellipse(0, 4, 20, 5, 0, 0, Math.PI * 2);
@@ -932,7 +891,6 @@ export class GameRenderer {
     ctx.translate(-4, -6);
     ctx.rotate(legSwing * 0.75);
     ctx.fillRect(-4.5, 0, 9, 18);
-    // Boot
     ctx.fillStyle = '#475569';
     ctx.fillRect(-2, 14, 11, 5.5);
     ctx.restore();
@@ -971,7 +929,7 @@ export class GameRenderer {
     ctx.fillRect(-3.5, 11, 7, 5.5);
     ctx.restore();
 
-    // 7. Helmet & Dark Reflective Visor
+    // 7. Helmet & Visor
     ctx.fillStyle = '#FFFFFF';
     ctx.beginPath();
     ctx.arc(3, -40, 12, 0, Math.PI * 2);
@@ -1049,7 +1007,6 @@ export class GameRenderer {
     const threatProgress = 1 - clampedThreat / 45;
     const tentacleBaseX = -120 + threatProgress * (w * 0.25 + 90);
 
-    // Billowing dust & debris exploding around tentacle base
     if (Math.random() < 0.7) {
       this.spawnParticle(
         tentacleBaseX + Math.random() * 90,
@@ -1062,7 +1019,6 @@ export class GameRenderer {
       );
     }
 
-    // 4 Writhing organic tentacles
     const tentacleConfigs = [
       { baseY: groundY - 50, length: 350, amp: 65, freq: 2.2, phase: 0, width: 55 },
       { baseY: groundY - 140, length: 430, amp: 85, freq: 1.8, phase: 1.4, width: 65 },
@@ -1074,7 +1030,6 @@ export class GameRenderer {
       this.drawSingleTentacle(ctx, tentacleBaseX, t.baseY, t.length, t.amp, t.freq, t.phase, t.width, time);
     }
 
-    // Ambient dust cloud obscuring tentacle base on left
     const baseCloud = ctx.createRadialGradient(tentacleBaseX, groundY - 60, 20, tentacleBaseX, groundY - 60, 160);
     baseCloud.addColorStop(0, 'rgba(30, 12, 53, 0.85)');
     baseCloud.addColorStop(0.5, 'rgba(51, 65, 85, 0.4)');
@@ -1110,7 +1065,6 @@ export class GameRenderer {
       points.push({ x: px, y: py, width: curWidth });
     }
 
-    // Outer Neon Violet Rim Glow (#9C73FF)
     ctx.shadowColor = '#9C73FF';
     ctx.shadowBlur = 28;
     ctx.strokeStyle = '#C084FC';
@@ -1124,7 +1078,6 @@ export class GameRenderer {
     }
     ctx.stroke();
 
-    // Dark organic body fill
     ctx.shadowBlur = 0;
     const bodyGrad = ctx.createLinearGradient(startX, startY - 60, startX + length, startY + 60);
     bodyGrad.addColorStop(0, '#150624');
@@ -1146,7 +1099,6 @@ export class GameRenderer {
     ctx.closePath();
     ctx.fill();
 
-    // Suction Cups
     ctx.fillStyle = '#C084FC';
     ctx.strokeStyle = '#581C87';
     ctx.lineWidth = 2;
